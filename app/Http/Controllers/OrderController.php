@@ -5,7 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Customer;
+use App\Models\Payment;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
 {
@@ -30,6 +33,7 @@ class OrderController extends Controller
             'products' => 'required|array',
             'products.*.product_id' => 'required|exists:products,id',
             'products.*.quantity' => 'required|integer|min:1',
+            'phone' => 'required|string'
         ]);
 
         $total_amount = 0;
@@ -41,17 +45,75 @@ class OrderController extends Controller
             }
         }
 
-        $order = Order::create([
-            'customer_id' => $validated['customer_id'],
-            'total_amount' => $total_amount,
-            'order_status' => 'pending',
-        ]);
+        DB::beginTransaction();
+        try {
+            $order = Order::create([
+                'customer_id' => $validated['customer_id'],
+                'total_amount' => $total_amount,
+                'phone' => $validated['phone'],
+                'order_status' => 'pending'
+            ]);
 
-        foreach ($validated['products'] as $product) {
-            $order->products()->attach($product['product_id'], ['quantity' => $product['quantity']]);
+            foreach ($validated['products'] as $product) {
+                $order->products()->attach($product['product_id'], ['quantity' => $product['quantity']]);
+            }
+
+            // Commit the transaction to ensure the order is saved
+            DB::commit();
+
+            // Trigger MPesa STK push
+            $mpesaController = new MpesaController();
+            $mpesaResponse = $mpesaController->stkPush(new Request([
+                'phone' => $validated['phone'],
+                'amount' => $order->total_amount,
+                'order_id' => $order->id,
+            ]));
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('MPesa STK Push Error: ' . $e->getMessage());
+            return response()->json(['error' => 'Failed to initiate MPesa STK Push'], 500);
         }
 
-        return $order->load('customer', 'products');
+        // Load relationships
+        $order->load('customer', 'products');
+
+        return response()->json([
+            'order' => $order,
+            'mpesa_response' => $mpesaResponse
+        ]);
+    }
+
+
+
+    public function callback(Request $request)
+    {
+        $validated = $request->validate([
+            'MerchantRequestID' => 'required|string',
+            'CheckoutRequestID' => 'required|string',
+            'ResultCode' => 'required|string',
+            'ResultDesc' => 'required|string',
+            'Amount' => 'required|numeric',
+            'MpesaReceiptNumber' => 'required|string',
+            'Balance' => 'nullable|string',
+            'TransactionDate' => 'required|string',
+            'PhoneNumber' => 'required|string',
+        ]);
+
+        $payment = Payment::where('CheckoutRequestID', $validated['CheckoutRequestID'])->first();
+
+        if ($payment) {
+            $payment->update([
+                'ResultCode' => $validated['ResultCode'],
+                'ResultDesc' => $validated['ResultDesc'],
+                'Amount' => $validated['Amount'],
+                'MpesaReceiptNumber' => $validated['MpesaReceiptNumber'],
+                'Balance' => $validated['Balance'] ?? null,
+                'TransactionDate' => $validated['TransactionDate'],
+                'PhoneNumber' => $validated['PhoneNumber'],
+            ]);
+        }
+
+        return response()->json(['message' => 'Payment callback received and processed'], 200);
     }
 
     public function show(Order $order)

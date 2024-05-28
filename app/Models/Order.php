@@ -21,6 +21,7 @@ class Order extends Model
         'total_amount',
         'products',
         'order_status',
+        'phone'
     ];
 
     protected static function boot()

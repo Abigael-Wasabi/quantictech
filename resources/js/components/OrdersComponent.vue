@@ -72,18 +72,13 @@
                         </button>
                     </div>
                     <div class="modal-body">
-                        <form @submit.prevent="saveOrder">
+                        <form @submit.prevent="initiateMpesaPayment">
                             <div class="form-group">
                                 <label for="customer">Customer</label>
                                 <select
                                     class="form-control"
                                     v-model="newOrder.customer_id"
-
                                 >
-                                    <!-- <option
-                                        v-for="customer in customers"
-                                        :value="customer.id"
-                                    > -->
                                     <option v-for="customer in customers"
                                         :value="customer.id" :key="customer.id">
                                         {{ customer.name }}
@@ -95,12 +90,7 @@
                                 <select
                                     class="form-control"
                                     v-model="selectedProduct"
-
                                 >
-                                    <!-- <option
-                                        v-for="product in products"
-                                        :value="product.id"
-                                    > -->
                                     <option v-for="product in products"
                                            :value="product.id"
                                            :key="product.id">
@@ -114,7 +104,6 @@
                                     type="number"
                                     class="form-control"
                                     v-model="quantity"
-
                                 />
                             </div>
                             <button
@@ -143,10 +132,19 @@
                                 </ul>
                                 <p v-else>No products added</p>
                             </div>
+                            <div class="form-group">
+                                <label for="phone">Phone Number</label>
+                                <input
+                                    type="text"
+                                    class="form-control"
+                                    v-model="phone"
+                                />
+                            </div>
                             <button type="submit" class="btn btn-primary">
                                 Save
                             </button>
                         </form>
+                        <div v-if="loading" class="loader">Processing Payment...</div>
                     </div>
                 </div>
             </div>
@@ -185,22 +183,15 @@
                                     v-model="editedOrder.customer_id"
                                     required
                                 >
-                                    <!-- <option
-                                        v-for="customer in customers"
-                                        :value="customer.id"
-                                    > -->
                                     <option v-for="customer in customers"
                                         :value="customer.id"
                                         :key="customer.id">
-
                                         {{ customer.name }}
                                     </option>
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="editTotalAmount"
-                                    >Total Amount</label
-                                >
+                                <label for="editTotalAmount">Total Amount</label>
                                 <input
                                     type="number"
                                     class="form-control"
@@ -216,9 +207,7 @@
                                     required
                                 >
                                     <option value="pending">Pending</option>
-                                    <option value="processing">
-                                        Processing
-                                    </option>
+                                    <option value="processing">Processing</option>
                                     <option value="completed">Completed</option>
                                 </select>
                             </div>
@@ -243,10 +232,13 @@ export default {
             search: "",
             selectedProduct: null,
             quantity: null,
+            phone: "",
+            loading: false,
             newOrder: {
                 customer_id: null,
                 total_amount: 0,
                 products: [],
+                phone: "",
             },
             editedOrder: {
                 id: null,
@@ -257,25 +249,24 @@ export default {
         };
     },
     methods: {
-        // Function to get color class based on order status
-    getStatusColor(order_status) {
-        switch(order_status) {
-            case 'pending':
-                return 'text-warning'; // Yellow color for pending status
-            case 'processing':
-                return 'text-primary'; // Blue color for processing status
-            case 'completed':
-                return 'text-success'; // Green color for completed status
-            default:
-                return ''; // Default color
-        }
-    },
+        getStatusColor(order_status) {
+            switch(order_status) {
+                case 'pending':
+                    return 'text-warning';
+                case 'processing':
+                    return 'text-primary';
+                case 'completed':
+                    return 'text-success';
+                default:
+                    return '';
+            }
+        },
         fetchOrders() {
             axios
                 .get("/api/orders", { params: { search: this.search } })
                 .then((response) => {
                     this.orders = response.data;
-                    // console.log(this.orders);
+                    console.log(this.orders);
                 });
         },
         fetchCustomers() {
@@ -328,10 +319,37 @@ export default {
                 }
             }
         },
+        initiateMpesaPayment() {
+            this.loading = true;
+            this.newOrder.phone = this.phone;
+            axios.post('/api/mpesa/stkpush', {
+                phone: this.phone,
+                amount: this.newOrder.total_amount,
+                order_id: new Date().getTime()
+            })
+            .then(response => {
+                if (response.data.ResponseCode === "0") {
+                    this.saveOrder();
+                } else {
+                    this.loading = false;
+                    alert("Payment failed. Please try again.");
+                }
+            })
+            .catch(error => {
+                this.loading = false;
+                console.error("Payment error:", error);
+                alert("Payment error. Please try again.");
+            });
+        },
         saveOrder() {
             axios.post("/api/orders", this.newOrder).then((response) => {
+                this.loading = false;
                 $("#addOrderModal").modal("hide");
                 this.fetchOrders();
+            }).catch(error => {
+                this.loading = false;
+                console.error("Order save error:", error);
+                alert("Order save error. Please try again.");
             });
         },
         updateOrderStatus() {
